@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zone Roster</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap bar">
+      <div class="brand">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-7h6v7"/></svg>
+        <span>Zone Roster</span>
+      </div>
+      <nav class="seg" aria-label="Views">
+        <a href="#live" data-view="live">Live</a>
+        <a href="#setup" data-view="setup">Setup</a>
+      </nav>
+      <div class="pill" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting…</span></div>
+    </div>
+  </header>
+
+  <!-- ===================== LIVE ===================== -->
+  <main class="wrap view" id="view-live">
+    <div class="notice" id="liveNotice" hidden></div>
+
+    <section class="card hero" aria-label="Headcount">
+      <div class="hero-count">
+        <div class="eyebrow">On site now</div>
+        <div class="big-row"><span class="big" id="kOnSite">–</span><span class="muted">people in on-site zones</span></div>
+        <div class="chips">
+          <span class="chip warn" id="kStale">– unconfirmed</span>
+          <span class="chip" id="kOffSite">– off site</span>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <button type="button" class="btn primary lg" id="btnPush">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
+          Send muster list to FacilityOS
+        </button>
+        <div class="row2">
+          <a class="btn" href="/api/muster-list?format=csv">Download CSV</a>
+          <button type="button" class="btn" id="btnPoll">Poll ACS now</button>
+        </div>
+        <div class="small muted center" id="pushInfo"></div>
+      </div>
+    </section>
+
+    <section class="zones" id="zones" aria-label="Zones"></section>
+
+    <div class="split">
+      <section class="card list main-col" aria-labelledby="musterH">
+        <div class="list-head">
+          <h2 id="musterH">Muster list</h2>
+          <span class="muted small" id="peopleCount"></span>
+          <label class="check small"><input type="checkbox" id="showAll"> Include off site</label>
+          <label class="search">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input type="search" id="peopleFilter" placeholder="Find a person or card" aria-label="Find a person or card">
+          </label>
+        </div>
+        <div id="people"></div>
+      </section>
+
+      <section class="card list side-col" aria-labelledby="activityH">
+        <div class="list-head">
+          <h2 id="activityH">Recent activity</h2>
+          <span class="muted small push">newest first</span>
+        </div>
+        <div id="events"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ===================== SETUP ===================== -->
+  <main class="wrap view setup" id="view-setup" hidden>
+    <section class="card pad" aria-labelledby="zonesH">
+      <div class="sec-head">
+        <div>
+          <h2 id="zonesH">Zones</h2>
+          <p class="muted">Zones come from Secure Entry. Only people in zones that count as on site go on the muster list. Turn it off for areas such as a parking garage.</p>
+        </div>
+      </div>
+      <div class="zone-edit" id="zoneRows"></div>
+    </section>
+
+    <section class="card pad" aria-labelledby="doorsH">
+      <div class="sec-head">
+        <div>
+          <h2 id="doorsH">Doors</h2>
+          <p class="muted">Read from ACS. Each badge says whether someone entered, left or is still inside a zone. To change a door, edit it in Secure Entry.</p>
+        </div>
+        <button type="button" class="btn" id="refreshDoors">Refresh from ACS</button>
+      </div>
+      <div class="door-list" id="doorRows"></div>
+      <p class="muted small" id="doorSourceInfo"></p>
+    </section>
+
+    <section class="card pad" aria-labelledby="connH">
+      <h2 id="connH">Connection</h2>
+      <div class="kv" id="health"></div>
+    </section>
+
+    <div class="savebar" id="saveBar" hidden>
+      <div class="wrap bar">
+        <span class="warn-text" id="saveState">Unsaved changes</span>
+        <span class="muted small" id="saveMsg">Saving recounts everyone from the stored badge history.</span>
+        <button type="button" class="btn ghost push" id="discardZones">Discard</button>
+        <button type="button" class="btn primary" id="saveZones">Save setup</button>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "zone-roster",
+  "version": "0.1.0",
+  "description": "Example dashboard showing which zone people are in, from AXIS Camera Station Pro Secure Entry badge events",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.js run",
+    "discover": "node src/index.js discover",
+    "poll-once": "node src/index.js poll-once",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "license": "MIT"
+}
