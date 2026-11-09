@@ -15,7 +15,7 @@ const T0 = Date.UTC(2026, 10, 6, 13, 0, 0);
 
 async function setup({ sources } = {}) {
   const acs = await startMockAcs({ sources });
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'muster-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zr-'));
   const cfg = structuredClone(DEFAULTS);
   cfg.polling.pageSize = 3; // force pagination
   let now = T0;
@@ -107,7 +107,7 @@ test('a record that shows up late (older than the last poll) is still picked up 
     setNow(T0 + 120_000);
     const r = await p.pollOnce();
     assert.equal(r.new, 1);
-    assert.equal(p.occupancy.musterList[0].name, 'Late');
+    assert.equal(p.occupancy.onSiteList[0].name, 'Late');
   } finally { await cleanup(); }
 });
 
@@ -167,7 +167,7 @@ test('zones and door membership come from the ACS door list on every poll', asyn
     const p = mk();
     acs.state.records.push(makeRecord({ t: T0 - 1000, door: 'Front door', side: 'A', name: 'Ann', card: 1 }));
     await p.pollOnce();
-    assert.deepEqual(p.zoneList(), [{ name: 'Building', onSite: true, doors: ['Front door', 'Lab door'] }]);
+    assert.deepEqual(p.zoneList(), [{ name: 'Building', onSite: true, notInAcs: false, doors: ['Front door', 'Lab door'] }]);
     assert.equal(p.feed()[0].outcome, 'Entered Building');
     assert.equal(p.feed()[0].counted, true);
 

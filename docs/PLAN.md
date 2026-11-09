@@ -9,7 +9,6 @@ Show which zone people are in, live, from AXIS Camera Station Pro (ACS Pro) Secu
 1. Read Secure Entry door events and the door list from ACS Pro.
 2. Work out each cardholder's current zone from what each badge event says.
 3. Keep a count per zone, show recent activity, and mark people not seen for a while as unconfirmed.
-4. Optionally, send the on-site list to FacilityOS EmergencyOS, as a CSV file or through its Partner API.
 
 ## 2. What the ACS Pro API offers (verified on the live server)
 
@@ -94,48 +93,29 @@ Secure Entry zones are made of perimeter doors and inside doors. Readers belong 
 
 Not yet observed: a door with a different zone on each side, a granted PIN, and non-English systems (Secure Entry translates this text). A badge that can't be read isn't counted and is flagged on the Live view.
 
-Each zone has one local setting, `offSiteZones`, which decides whether people in it count toward the on-site total and the muster list. Door controllers also expose zones through an undocumented `/nbix/accesscontrol` REST API, but Zone Roster doesn't need it.
+Each zone has one local setting, `offSiteZones`, which decides whether people in it count toward the on-site total. Door controllers also expose zones through an undocumented `/nbix/accesscontrol` REST API, but Zone Roster doesn't need it.
 
 ### 4.1 Presence rules and known limitations
 
 | Situation | Behaviour |
 |---|---|
-| Free egress (REX button, no exit reader) | No exit event is recorded, so the person stays "on site". `staleAfterHours` (default 18 h) marks people whose last badge is older than that as *unconfirmed*. A badge at an inside door resets the timer. EmergencyOS can treat them as "unconfirmed" rather than missing. |
-| Tailgating, or a door held open for a group | Only the person who badged is moved. This is inherent to badge-based mustering. |
+| Free egress (REX button, no exit reader) | No exit event is recorded, so the person stays "on site". `staleAfterHours` (default 18 h) marks people whose last badge is older than that as *unconfirmed*. A badge at an inside door resets the timer. |
+| Tailgating, or a door held open for a group | Only the person who badged is moved. This is inherent to counting people by badge. |
 | Access granted but door not opened | Counted as a transition. A stricter mode could require a `doorPhysicalOpen` on the same door within N seconds. This mode is not implemented. |
 | Access denied | Ignored; the person does not move. |
 | Two cardholders with the same name | They merge, because events carry no cardholder ID. `presence.personKey` can be set to `cardnumber` instead, but then a person with several cards is split. **Ask Axis to add a cardholder ID (token) to the external data record.** |
 | Anti-passback zones | Compatible. Anti-passback makes entries and exits more reliable. |
 
-## 5. Optional extension: FacilityOS / EmergencyOS
+## 5. Questions to take to Axis
 
-FacilityOS has no inbound webhook. Its v1 Partner API does have `POST /emos/uploadmusteringlist`: a multipart CSV upload with an OAuth 2.0 client-credentials bearer token and a `cid` (CustomerId) header. The response is `{status, total, errorMessage}`. The **CSV column schema is not published**, so Zone Roster:
-
-* writes `out/mustering-list.csv` on every change (dry-run mode, the default), with configurable column names;
-* uploads that CSV when `facilityOs.enabled = true`, on change and at least every `pushEveryMin`, and on demand from `POST /api/facilityos/push` (for example, wired to the "start muster" trigger);
-* serves `GET /api/muster-list` as JSON for any other consumer.
-
-FacilityOS's own pull connectors (Kantech, ISONAS, AxiomXA) sync every 15 minutes and again when an evacuation starts. A 60-second ACS poll with an on-demand push is fresher than those connectors.
-
-## 6. Questions to take to the vendors
-
-**FacilityOS**
-1. The exact CSV schema for `/emos/uploadmusteringlist`: required columns, the person identifier (email, employee ID or badge number) and zone or site columns. Does an upload replace or merge with the current list?
-2. Is v1 `uploadmusteringlist` the right endpoint for a live occupancy feed, or is there a presence API like the one behind the Genetec connector?
-3. Rate limits and token lifetime.
-4. How is a stale or unconfirmed presence represented?
-
-**Axis**
 1. Can `GetExternalDataSourceList` be documented and supported? It is the only way to list doors.
 2. Can a stable cardholder ID (or external ID / employee number) be included in Secure Entry external-data records?
 3. Is a zone or roll-call API planned? Can the `Zone:` line in event text be documented, or provided as a structured field?
 4. Does `TotalNumberOfRecords` and pagination stay stable while new records arrive?
 
-## 7. Production hardening (beyond this example)
+## 6. Production hardening (beyond this example)
 
-* Replace the JSON state file with SQLite or a database, and run Zone Roster as a Windows service (for example with NSSM).
+* Replace the JSON state file with SQLite or a database.
 * Pin the ACS certificate with `acs.tls.caFile` or `acs.tls.fingerprint256` instead of `allowSelfSigned`.
 * Use a dedicated least-privilege ACS user (operator role with Data search access).
-* Store secrets in Windows Credential Manager or DPAPI instead of environment variables.
-* Run on the ACS server or on the same LAN. Only outbound HTTPS to FacilityOS is needed.
-* Map people to the FacilityOS address book by email or employee ID once the cardholder-ID question is resolved.
+* Run on the ACS server or on the same LAN.

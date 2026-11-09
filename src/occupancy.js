@@ -37,9 +37,17 @@ export function classify(ev, cfg, ctx = {}) {
   if (ev.zoneAction === 'unknown') return notRecognised();
   // "From X" must name a real zone: wording we haven't seen (such as a door between two zones)
   // must not be read as someone leaving the site.
-  if (ev.zoneAction === 'from' && ctx.zones?.size && !ctx.zones.has(ev.zoneName)) return notRecognised();
+  // A zone named by earlier badges counts too, so renaming or deleting a zone doesn't undo past exits.
+  if (ev.zoneAction === 'from' && ctx.zones?.size && !ctx.zones.has(ev.zoneName) && !ctx.pastZones?.has(ev.zoneName)) return notRecognised();
   const action = { to: 'enter', from: 'leave', inside: 'confirm' }[ev.zoneAction];
   return { action, zone: ev.zoneName };
+}
+
+/** Zones that badges in the journal say someone entered or was inside, whether or not ACS still lists them. */
+export function pastZones(journal) {
+  const names = new Set();
+  for (const ev of journal) if (ev.zoneAction === 'to' || ev.zoneAction === 'inside') names.add(ev.zoneName);
+  return names;
 }
 
 /**
@@ -59,8 +67,9 @@ export function computeOccupancy(journal, cfg, nowMs = Date.now(), ctx = {}) {
 
   const people = new Map();
   const latestAtDoor = new Map();
+  const classifyCtx = { ...ctx, pastZones: pastZones(sorted) };
   for (const ev of sorted) {
-    const c = classify(ev, cfg, ctx);
+    const c = classify(ev, cfg, classifyCtx);
     if (ev.door && isGranted(ev, cfg)) latestAtDoor.set(ev.door, c.unreadable ? { door: ev.door, reason: c.reason, lastSeen: new Date(ev.time).toISOString() } : null);
     if (c.action === 'ignore') continue;
     const key = personKeyOf(ev, keyMode);
@@ -76,7 +85,9 @@ export function computeOccupancy(journal, cfg, nowMs = Date.now(), ctx = {}) {
   }
 
   const bucket = new Map();
-  const zoneBucket = (name) => bucket.get(name) ?? bucket.set(name, { name, onSite: countsOnSite(name), count: 0, staleCount: 0 }).get(name);
+  // People stay counted in a zone that's gone from ACS until they next badge, because nothing says they left.
+  const notInAcs = (name) => Boolean(ctx.zones?.size) && !ctx.zones.has(name);
+  const zoneBucket = (name) => bucket.get(name) ?? bucket.set(name, { name, onSite: countsOnSite(name), notInAcs: notInAcs(name), count: 0, staleCount: 0 }).get(name);
   for (const name of ctx.zones ?? []) zoneBucket(name);
 
   const list = [];
@@ -103,7 +114,7 @@ export function computeOccupancy(journal, cfg, nowMs = Date.now(), ctx = {}) {
     },
     zones: [...bucket.values()].sort((a, b) => a.name.localeCompare(b.name)),
     people: list,
-    musterList: here,
+    onSiteList: here,
     unreadableDoors: [...latestAtDoor.values()].filter(Boolean),
   };
 }

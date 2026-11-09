@@ -9,9 +9,9 @@ import { loadConfig, securityWarnings } from './config.js';
 import { AcsClient } from './acsClient.js';
 import { Store } from './store.js';
 import { Poller } from './poller.js';
-import { FacilityOsSink } from './facilityOsSink.js';
 import { createServer } from './server.js';
 import { discoverDoors } from './discovery.js';
+import { secretStore } from './credentials.js';
 
 const args = process.argv.slice(2);
 const cmd = args.find((a) => !a.startsWith('--')) ?? 'run';
@@ -24,7 +24,10 @@ const log = {
 };
 
 const cfg = loadConfig(cfgPath);
-if (!cfg.acs.username) {
+const secrets = secretStore();
+// Under the Windows service the dashboard can start empty, so the sign-in can be entered in Setup.
+const awaitingSignIn = !cfg.acs.username && cmd === 'run' && secrets !== null;
+if (!cfg.acs.username && !awaitingSignIn) {
   console.error('ACS credentials missing: set ACS_USERNAME and ACS_PASSWORD (or acs.username/password in the config).');
   process.exit(2);
 }
@@ -46,7 +49,6 @@ const store = new Store(cfg.dataDir);
 if (cmd === 'reset') { store.reset(); log.info('state cleared'); process.exit(0); }
 
 const poller = new Poller({ client, store, cfg, log });
-const sink = new FacilityOsSink(cfg, log);
 
 if (cmd === 'poll-once') {
   const r = await poller.pollOnce();
@@ -55,16 +57,27 @@ if (cmd === 'poll-once') {
   process.exit(0);
 }
 
-poller.on('occupancy', (occ, changed) => {
-  sink.maybePush(occ, changed).catch((e) => log.warn(`[facilityos] ${e.message}`));
-});
-poller.start();
+if (awaitingSignIn) log.warn('No ACS sign-in is stored yet: enter it in the Setup view.');
+else poller.start();
 
-const server = createServer({ cfg, poller, sink, client, log });
+const server = createServer({ cfg, poller, client, log, secrets });
 server.listen(cfg.server.port, cfg.server.host, () => {
-  log.info(`Zone Roster: dashboard http://${cfg.server.host}:${cfg.server.port}  (ACS ${cfg.acs.baseUrl}, poll every ${cfg.polling.intervalSec}s, FacilityOS ${cfg.facilityOs.enabled ? 'upload' : 'dry-run'})`);
+  log.info(`Zone Roster: dashboard http://${cfg.server.host}:${cfg.server.port}  (ACS ${cfg.acs.baseUrl}, poll every ${cfg.polling.intervalSec}s)`);
 });
 
-const shutdown = () => { poller.stop(); server.close(); store.save(); process.exit(0); };
+let stopping = false;
+const shutdown = () => {
+  if (stopping) return;
+  stopping = true;
+  poller.stop();
+  store.save();
+  // Close open browser connections before exiting, so the port is released promptly.
+  const exit = () => process.exit(0);
+  server.close(exit);
+  server.closeAllConnections();
+  setTimeout(exit, 3000).unref();
+};
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+// Windows has no SIGTERM, so the service host asks for a clean stop by closing stdin.
+if (args.includes('--stop-on-stdin-close')) process.stdin.on('end', shutdown).resume();

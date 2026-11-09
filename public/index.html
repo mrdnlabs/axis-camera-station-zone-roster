@@ -4,13 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Zone Roster</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="top">
     <div class="wrap bar">
       <div class="brand">
-        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-7h6v7"/></svg>
+        <img src="icon.svg" width="30" height="30" alt="">
         <span>Zone Roster</span>
       </div>
       <nav class="seg" aria-label="Views">
@@ -23,6 +24,7 @@
 
   <!-- ===================== LIVE ===================== -->
   <main class="wrap view" id="view-live">
+    <div class="notice" id="signInNotice" hidden>ACS isn't accepting a sign-in, so nothing is being counted. <a href="#setup">Enter it in Setup</a>.</div>
     <div class="notice" id="liveNotice" hidden></div>
 
     <section class="card hero" aria-label="Headcount">
@@ -35,24 +37,19 @@
         </div>
       </div>
       <div class="hero-actions">
-        <button type="button" class="btn primary lg" id="btnPush">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
-          Send muster list to FacilityOS
-        </button>
         <div class="row2">
-          <a class="btn" href="/api/muster-list?format=csv">Download CSV</a>
+          <a class="btn" href="/api/on-site?format=csv">Download CSV</a>
           <button type="button" class="btn" id="btnPoll">Poll ACS now</button>
         </div>
-        <div class="small muted center" id="pushInfo"></div>
       </div>
     </section>
 
     <section class="zones" id="zones" aria-label="Zones"></section>
 
     <div class="split">
-      <section class="card list main-col" aria-labelledby="musterH">
+      <section class="card list main-col" aria-labelledby="peopleH">
         <div class="list-head">
-          <h2 id="musterH">Muster list</h2>
+          <h2 id="peopleH">People on site</h2>
           <span class="muted small" id="peopleCount"></span>
           <label class="check small"><input type="checkbox" id="showAll"> Include off site</label>
           <label class="search">
@@ -75,14 +72,40 @@
 
   <!-- ===================== SETUP ===================== -->
   <main class="wrap view setup" id="view-setup" hidden>
+    <section class="card pad" aria-labelledby="signInH">
+      <div class="sec-head">
+        <div>
+          <h2 id="signInH">ACS sign-in</h2>
+          <p class="muted" id="signInInfo">Checking…</p>
+        </div>
+      </div>
+      <form class="form-row" id="signInForm" autocomplete="off" hidden>
+        <label class="field" id="acsCurrentField" hidden>Current password<input id="acsCurrent" type="password" autocomplete="off" maxlength="1024"></label>
+        <label class="field">Username<input id="acsUser" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="256" required></label>
+        <label class="field"><span id="acsPassLabel">Password</span><input id="acsPass" type="password" autocomplete="new-password" maxlength="1024" required></label>
+        <button type="submit" class="btn primary" id="saveSignIn">Test and save</button>
+      </form>
+      <p class="small" id="signInMsg" role="status"></p>
+    </section>
+
     <section class="card pad" aria-labelledby="zonesH">
       <div class="sec-head">
         <div>
           <h2 id="zonesH">Zones</h2>
-          <p class="muted">Zones come from Secure Entry. Only people in zones that count as on site go on the muster list. Turn it off for areas such as a parking garage.</p>
+          <p class="muted">Zones come from Secure Entry. Only people in zones that count as on site are included in the on-site count. Turn it off for areas such as a parking garage.</p>
         </div>
       </div>
       <div class="zone-edit" id="zoneRows"></div>
+    </section>
+
+    <section class="card pad" aria-labelledby="staleH">
+      <div class="sec-head">
+        <div>
+          <h2 id="staleH">Unconfirmed status</h2>
+          <p class="muted">Someone still counted in a zone is marked unconfirmed, and left out of the on-site count, once their last badge is older than this.</p>
+        </div>
+      </div>
+      <label class="field inline">Mark unconfirmed after <input id="staleHours" type="number" min="0.5" step="0.5"> hours without a badge</label>
     </section>
 
     <section class="card pad" aria-labelledby="doorsH">

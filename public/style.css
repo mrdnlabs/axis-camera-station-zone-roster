@@ -34,7 +34,6 @@ a { color: var(--accent); }
 .wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
-.center { text-align: center; }
 .push { margin-left: auto; }
 .warn-text { color: var(--warn); font-weight: 500; }
 [hidden] { display: none !important; }
@@ -43,7 +42,7 @@ a { color: var(--accent); }
 .top { background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
 .bar { display: flex; align-items: center; gap: 16px 24px; flex-wrap: wrap; min-height: 60px; padding-top: 8px; padding-bottom: 8px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
-.brand svg { color: var(--accent); }
+.brand img { display: block; }
 .seg { display: flex; gap: 4px; background: var(--track); padding: 4px; border-radius: 10px; }
 .seg a { padding: 7px 16px; border-radius: 7px; color: var(--muted); font-weight: 500; text-decoration: none; }
 .seg a[aria-current="page"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
@@ -76,7 +75,6 @@ a { color: var(--accent); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
-.btn.lg { height: 48px; font-size: 15px; }
 .btn:disabled { opacity: .55; cursor: progress; }
 .btn:focus-visible, .seg a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
@@ -151,6 +149,13 @@ a { color: var(--accent); }
 .kv .k { font-size: 12px; color: var(--muted); }
 .kv .v { font-weight: 500; overflow-wrap: anywhere; }
 .kv .v.err { color: var(--bad); }
+.form-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); flex: 1 1 220px; max-width: 320px; }
+.field.inline { flex: none; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 14px; color: var(--text); max-width: none; }
+.field input { height: 40px; padding: 0 12px; border: 1px solid var(--field); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+.field.inline input { width: 96px; }
+.msg-ok { color: var(--accent-strong); font-weight: 500; }
+.msg-err { color: var(--bad); font-weight: 500; }
 .savebar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(20, 23, 28, .08); z-index: 5; }
 .savebar #saveMsg.err { color: var(--bad); }
 

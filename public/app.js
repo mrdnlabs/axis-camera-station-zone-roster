@@ -23,7 +23,7 @@ const api = async (path, opts = {}) => {
   return j;
 };
 
-let occ = null, status = null, zones = null, savedZones = null, doors = null, dirty = false;
+let occ = null, status = null, zones = null, savedZones = null, savedStale = null, doors = null, dirty = false;
 
 // ---------------- views (#live / #setup) ----------------
 function route() {
@@ -33,6 +33,7 @@ function route() {
   });
   $('view-live').hidden = view !== 'live';
   $('view-setup').hidden = view !== 'setup';
+  if (view === 'setup') loadSignIn();
   if (view === 'setup' && !doors) loadDoors();
   if (view === 'live') renderEvents();
 }
@@ -42,16 +43,11 @@ window.addEventListener('beforeunload', (e) => { if (dirty) e.preventDefault(); 
 // ---------------- header + connection ----------------
 function renderStatus() {
   const c = $('conn');
-  c.className = `pill ${status.connected === true ? 'ok' : status.connected === false ? 'bad' : ''}`;
-  $('connText').textContent = status.connected === false
+  c.className = `pill ${status.signInNeeded ? 'bad' : status.connected === true ? 'ok' : status.connected === false ? 'bad' : ''}`;
+  $('signInNotice').hidden = !status.signInNeeded;
+  $('connText').textContent = status.signInNeeded ? 'ACS sign-in needed' : status.connected === false
     ? `ACS unreachable · retrying (${status.consecutiveFailures}x) · last good ${ago(status.lastSuccess)}`
     : status.connected ? `Live · ACS ${status.server?.name ?? ''} · polled ${ago(status.lastSuccess)}` : 'Connecting to ACS…';
-
-  const fos = status.facilityOs.last;
-  const mode = status.facilityOs.enabled ? 'uploads to FacilityOS' : 'dry run (CSV only)';
-  $('pushInfo').textContent = fos?.at
-    ? `Last sent ${ago(fos.at)} · ${plural(fos.count, 'person', 'people')} · ${fos.error ? 'FAILED: ' + fos.error : mode}`
-    : `Not sent yet · ${mode}`;
 
   const lp = status.lastPoll, p = status.polling, gap = status.recoveredGap;
   const items = [
@@ -62,37 +58,42 @@ function renderStatus() {
     ['Deep re-sync', `Last ${p.deepResyncWindowMin >= 60 ? Math.round(p.deepResyncWindowMin / 60) + ' h' : p.deepResyncWindowMin + ' min'}, every ${p.deepResyncEveryMin} min`],
     ['Gap recovery', gap ? `${ago(gap.at)} · re-read from ${fmt(gap.from)} · ${plural(gap.recordsRecovered, 'event')} recovered${gap.truncated ? ' (cut to max catch-up)' : ''}` : 'None needed'],
     ['Badge history', `${plural(status.journalSize, 'event')} kept · event types ${p.eventTypes.join(', ')}`],
-    ['FacilityOS', status.facilityOs.enabled ? 'Uploads enabled' : 'Dry run · writes CSV only'],
     ['Last error', status.lastError ? `${fmt(status.lastError.at)}: ${status.lastError.message}` : 'None', !!status.lastError],
   ];
   $('health').innerHTML = items.map(([k, v, err]) => `<div><div class="k">${esc(k)}</div><div class="v${err ? ' err' : ''}">${esc(v)}</div></div>`).join('');
+
+  $('staleHours').max = status.presence.maxHours;
+  if (!dirty && status.presence.staleAfterHours !== savedStale) {
+    savedStale = status.presence.staleAfterHours;
+    $('staleHours').value = savedStale;
+  }
 }
 
 // ---------------- live ----------------
 function renderOccupancy() {
   $('kOnSite').textContent = occ.totals.onSite;
   $('kStale').textContent = `${occ.totals.onSiteStale} unconfirmed`;
-  $('kStale').title = 'Counted as on site, but their last badge is older than the stale-presence limit';
+  $('kStale').title = `In a zone, but their last badge is more than ${plural(status?.presence.staleAfterHours ?? 0, 'hour')} old`;
   $('kStale').hidden = occ.totals.onSiteStale === 0;
   $('kOffSite').textContent = `${occ.totals.offSite} off site`;
 
   const max = Math.max(1, ...occ.zones.map((z) => z.count));
   $('zones').innerHTML = occ.zones.map((z) => `
     <div class="zone ${z.onSite ? 'on' : ''}">
-      <div class="zone-top"><span class="zone-name">${esc(z.name)}</span><span class="chip xs ${z.onSite ? 'on' : ''}">${z.onSite ? 'On site' : 'Off site'}</span></div>
+      <div class="zone-top"><span class="zone-name">${esc(z.name)}</span><span class="chip xs ${z.notInAcs ? 'warn' : z.onSite ? 'on' : ''}">${z.notInAcs ? 'Not in ACS' : z.onSite ? 'On site' : 'Off site'}</span></div>
       <div class="zone-count">${z.count}${z.staleCount ? `<small>${z.staleCount} unconfirmed</small>` : ''}</div>
       <div class="meter"><div style="width:${Math.round((z.count / max) * 100)}%"></div></div>
     </div>`).join('');
 
   const unreadable = occ.unreadableDoors ?? [];
+  const removed = occ.zones.filter((z) => z.notInAcs && z.count + z.staleCount > 0).map((z) => z.name);
+  const messages = [];
+  if (status?.connected && !occ.zones.length) messages.push('No zones found in ACS, so nobody can be counted. Create zones in Secure Entry and add doors to them.');
+  if (removed.length) messages.push(`${removed.join(', ')} ${removed.length === 1 ? 'is' : 'are'} no longer in Secure Entry. People last seen there stay listed under that name until they next badge.`);
+  if (unreadable.length) messages.push(`The latest badge could not be read at ${unreadable.map((d) => `${d.door} (${d.reason})`).join(', ')}, so it was not counted.`);
   const notice = $('liveNotice');
-  if (status?.connected && !occ.zones.length) {
-    notice.textContent = 'No zones found in ACS, so nobody can be counted. Create zones in Secure Entry and add doors to them.';
-    notice.hidden = false;
-  } else if (unreadable.length) {
-    notice.textContent = `The latest badge could not be read at ${unreadable.map((d) => `${d.door} (${d.reason})`).join(', ')}, so it was not counted.`;
-    notice.hidden = false;
-  } else notice.hidden = true;
+  notice.textContent = messages.join(' ');
+  notice.hidden = !messages.length;
   renderPeople();
 }
 
@@ -102,7 +103,7 @@ function renderPeople() {
   const list = occ.people
     .filter((p) => (all || p.onSite) && (!q || [p.name, p.zoneName, p.lastDoor, ...p.cardNumbers].some((s) => String(s ?? '').toLowerCase().includes(q))))
     .sort((a, b) => (b.onSite - a.onSite) || String(a.name).localeCompare(String(b.name)));
-  $('peopleCount').textContent = `${occ.totals.onSite} on site`;
+  $('peopleCount').textContent = plural(occ.totals.onSite, 'person', 'people');
   $('people').innerHTML = list.map((p) => {
     const cls = p.stale ? 'stale' : p.onSite ? '' : 'off';
     const tag = p.stale ? '<span class="chip xs warn">Unconfirmed</span> ' : '';
@@ -132,8 +133,10 @@ async function renderEvents() {
 // ---------------- setup: zones + doors ----------------
 // Zones and door membership come from Secure Entry; the only setting here is whether a zone counts as on site.
 const zoneKey = (list) => JSON.stringify((list ?? []).map((z) => [z.name, z.onSite]));
+const zonesChanged = () => zoneKey(zones) !== zoneKey(savedZones);
+const staleChanged = () => savedStale !== null && Number($('staleHours').value) !== savedStale;
 function markDirty() {
-  dirty = zoneKey(zones) !== zoneKey(savedZones);
+  dirty = zonesChanged() || staleChanged();
   $('saveBar').hidden = !dirty;
   $('saveState').textContent = 'Unsaved changes';
   $('saveMsg').className = 'muted small'; $('saveMsg').textContent = 'Saving recounts everyone from the stored badge history.';
@@ -142,9 +145,9 @@ function markDirty() {
 function renderZones() {
   $('zoneRows').innerHTML = (zones ?? []).map((z, i) => `
     <div class="zrow" data-i="${i}">
-      <div class="grow"><b>${esc(z.name)}</b><div class="muted small">${esc(z.doors.length ? z.doors.join(', ') : 'No doors listed by ACS')}</div></div>
+      <div class="grow"><b>${esc(z.name)}</b><div class="muted small">${esc(z.notInAcs ? 'No longer in Secure Entry' : z.doors.length ? z.doors.join(', ') : 'No doors listed by ACS')}</div></div>
       <label class="switch">On site<input type="checkbox" data-f="onSite" ${z.onSite ? 'checked' : ''}><span class="track"><span class="knob"></span></span></label>
-    </div>`).join('') || '<div class="empty">No zones found. Create zones in Secure Entry and they appear here.</div>';
+    </div>`).join('') || `<div class="empty">${status?.signInNeeded ? 'Zones appear here once ACS accepts a sign-in.' : 'No zones found. Create zones in Secure Entry and they appear here.'}</div>`;
 }
 
 function renderDoors() {
@@ -170,13 +173,21 @@ $('zoneRows').addEventListener('change', (e) => {
   markDirty();
 });
 $('refreshDoors').addEventListener('click', () => withBusy($('refreshDoors'), () => loadDoors(true)));
-$('discardZones').addEventListener('click', () => { zones = structuredClone(savedZones); renderZones(); markDirty(); });
+$('staleHours').addEventListener('input', markDirty);
+$('discardZones').addEventListener('click', () => { zones = structuredClone(savedZones); $('staleHours').value = savedStale; renderZones(); markDirty(); });
 $('saveZones').addEventListener('click', () => withBusy($('saveZones'), async () => {
   $('saveMsg').className = 'muted small'; $('saveMsg').textContent = 'Saving…';
   try {
-    const r = await api('/api/zones', { method: 'PUT', body: JSON.stringify({ offSiteZones: zones.filter((z) => !z.onSite).map((z) => z.name) }) });
-    occ = r.occupancy;
-    zones = r.zones; savedZones = structuredClone(zones);
+    if (zonesChanged()) {
+      const r = await api('/api/zones', { method: 'PUT', body: JSON.stringify({ offSiteZones: zones.filter((z) => !z.onSite).map((z) => z.name) }) });
+      occ = r.occupancy;
+      zones = r.zones; savedZones = structuredClone(zones);
+    }
+    if (staleChanged()) {
+      const hours = Number($('staleHours').value);
+      occ = (await api('/api/presence', { method: 'PUT', body: JSON.stringify({ staleAfterHours: hours }) })).occupancy;
+      savedStale = hours;
+    }
     renderOccupancy(); renderZones(); markDirty();
   } catch (e) {
     $('saveState').textContent = 'Not saved';
@@ -200,13 +211,56 @@ async function loadDoors(refresh = false) {
   renderDoors();
 }
 
+// ---------------- setup: ACS sign-in ----------------
+function showSignInResult(text, ok) {
+  $('signInMsg').className = `small ${ok ? 'msg-ok' : 'msg-err'}`;
+  $('signInMsg').textContent = text;
+}
+
+async function loadSignIn() {
+  let s;
+  try { s = await api('/api/acs-sign-in'); }
+  catch { // refused unless the browser is on the server itself
+    $('signInInfo').textContent = 'The sign-in can only be viewed or changed in a browser on the server itself, because the dashboard connection is not encrypted.';
+    $('signInForm').hidden = true;
+    return;
+  }
+  $('signInForm').hidden = !s.canChange;
+  $('acsCurrentField').hidden = !s.currentRequired;
+  $('acsCurrent').required = s.currentRequired;
+  $('acsPassLabel').textContent = s.configured ? 'New password' : 'Password';
+  $('signInInfo').textContent = !s.canChange
+    ? `Signed in as ${s.username}, from the ACS_USERNAME and ACS_PASSWORD environment variables. Install the Windows service to change it here.`
+    : (!s.configured ? 'No sign-in is stored yet. Enter an ACS account to start counting.'
+      : s.currentRequired ? `Signed in as ${s.username}. To replace it, enter its current password and the new account.`
+        : `ACS is rejecting the sign-in for ${s.username}. Enter a working account.`)
+      + ' It is tested with ACS before saving, stored encrypted, and never shown again.';
+}
+
+$('signInForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const username = $('acsUser').value, password = $('acsPass').value, currentPassword = $('acsCurrent').value;
+  $('acsPass').value = $('acsCurrent').value = ''; // never left on the page, whatever the result
+  withBusy($('saveSignIn'), async () => {
+    $('signInMsg').className = 'small muted'; $('signInMsg').textContent = 'Testing with ACS…';
+    try {
+      await api('/api/acs-sign-in', { method: 'PUT', body: JSON.stringify({ username, password, currentPassword }) });
+      $('acsUser').value = '';
+      showSignInResult('Saved. ACS accepted the sign-in.', true);
+      await loadSignIn();
+      doors = null;
+      await loadDoors();
+      await refresh();
+    } catch (err) { showSignInResult(err.message, false); }
+  });
+});
+
 // ---------------- actions ----------------
 async function withBusy(btn, fn) {
   btn.disabled = true;
   try { await fn(); } catch (e) { alert(e.message); } finally { btn.disabled = false; }
 }
 $('btnPoll').addEventListener('click', () => withBusy($('btnPoll'), async () => { await api('/api/poll', { method: 'POST', body: '{}' }); await refresh(); }));
-$('btnPush').addEventListener('click', () => withBusy($('btnPush'), async () => { await api('/api/facilityos/push', { method: 'POST', body: '{}' }); await refresh(); }));
 $('peopleFilter').addEventListener('input', renderPeople);
 $('showAll').addEventListener('change', renderPeople);
 

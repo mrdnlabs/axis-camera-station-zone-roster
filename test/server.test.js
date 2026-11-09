@@ -7,7 +7,6 @@ import path from 'node:path';
 import { AcsClient } from '../src/acsClient.js';
 import { Store } from '../src/store.js';
 import { Poller } from '../src/poller.js';
-import { FacilityOsSink } from '../src/facilityOsSink.js';
 import { createServer } from '../src/server.js';
 import { DEFAULTS } from '../src/config.js';
 import { startMockAcs, makeRecord } from './mockAcs.js';
@@ -16,12 +15,12 @@ const quiet = { info() {}, warn() {} };
 
 test('HTTP API: array responses (badge event feed) are served as JSON, not mistaken for a status tuple', async () => {
   const acs = await startMockAcs();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'muster-srv-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zr-srv-'));
   const cfg = structuredClone(DEFAULTS);
-  cfg.dataDir = dir; cfg.outDir = dir; cfg._file = path.join(dir, 'config.json');
+  cfg.dataDir = dir; cfg._file = path.join(dir, 'config.json');
   const client = new AcsClient({ baseUrl: acs.url, username: 'u', password: 'p' });
   const poller = new Poller({ client, store: new Store(dir), cfg, log: quiet });
-  const server = createServer({ cfg, poller, sink: new FacilityOsSink(cfg, quiet), client, log: quiet });
+  const server = createServer({ cfg, poller, client, log: quiet });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -35,8 +34,8 @@ test('HTTP API: array responses (badge event feed) are served as JSON, not mista
     assert.ok(Array.isArray(list) && list.length === 1);
     assert.equal(list[0].outcome, 'Entered Building');
 
-    const muster = await (await fetch(`${base}/api/muster-list`)).json();
-    assert.deepEqual(muster.people.map((p) => p.name), ['Ann']);
+    const onSite = await (await fetch(`${base}/api/on-site`)).json();
+    assert.deepEqual(onSite.people.map((p) => p.name), ['Ann']);
 
     const forbidden = await fetch(`${base}/api/poll`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: '{}' });
     assert.equal(forbidden.status, 403);
@@ -49,7 +48,7 @@ test('HTTP API: array responses (badge event feed) are served as JSON, not mista
     assert.equal(saved.status, 200);
     assert.equal((await saved.json()).occupancy.totals.onSite, 0);
     assert.deepEqual(JSON.parse(fs.readFileSync(cfg._file, 'utf8')).offSiteZones, ['Building']);
-    assert.equal((await (await fetch(`${base}/api/muster-list`)).json()).count, 0);
+    assert.equal((await (await fetch(`${base}/api/on-site`)).json()).count, 0);
 
     const raw = (opts) => new Promise((resolve, reject) => {
       const q = http.request({ host: '127.0.0.1', port: server.address().port, ...opts }, (r) => { r.resume(); r.on('end', () => resolve(r)); });

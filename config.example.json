@@ -27,12 +27,5 @@
     "host": "127.0.0.1",
     "port": 8787
   },
-  "facilityOs": {
-    "enabled": false,
-    "tokenUrl": "https://api.goilobby.com/auth/connect/token",
-    "apiBase": "https://partnerapi.goilobby.com",
-    "pushEveryMin": 15,
-    "includeStale": false
-  },
   "offSiteZones": []
 }

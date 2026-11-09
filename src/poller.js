@@ -8,13 +8,11 @@
 //   -> on success: watermark = time this poll started
 //   -> on failure: exponential backoff; watermark unchanged, so the next success re-reads the gap
 
-import { EventEmitter } from 'node:events';
 import { normalizeRecord, eventTypeFilter } from './normalize.js';
-import { computeOccupancy, classify } from './occupancy.js';
+import { computeOccupancy, classify, pastZones } from './occupancy.js';
 
-export class Poller extends EventEmitter {
+export class Poller {
   constructor({ client, store, cfg, now = () => Date.now(), log = console }) {
-    super();
     Object.assign(this, { client, store, cfg, now, log });
     this.timer = null;
     this.running = false;
@@ -31,8 +29,8 @@ export class Poller extends EventEmitter {
   }
 
   /** Feed entry: the event plus what it did and how long it took to reach us (if known). */
-  describe(ev) {
-    const c = classify(ev, this.cfg, this.zoneCtx);
+  describe(ev, ctx = this.zoneCtx) {
+    const c = classify(ev, this.cfg, ctx);
     const outcome = { enter: `Entered ${c.zone}`, leave: `Left ${c.zone}`, confirm: `Still in ${c.zone}`, ignore: `Not counted: ${c.reason}` }[c.action];
     return {
       ...ev,
@@ -43,7 +41,8 @@ export class Poller extends EventEmitter {
   }
 
   feed() {
-    return this.recent.map((ev) => this.describe(ev));
+    const ctx = { ...this.zoneCtx, pastZones: pastZones(this.store.journal.values()) };
+    return this.recent.map((ev) => this.describe(ev, ctx));
   }
 
   /** Reload zone names and door membership from the ACS door list. A failure keeps the last known list. */
@@ -61,10 +60,19 @@ export class Poller extends EventEmitter {
   /** Every known zone with its on-site setting and member doors. */
   zoneList() {
     const doors = [...this.zoneCtx.doorZones];
-    return this.occupancy.zones.map((z) => ({ name: z.name, onSite: z.onSite, doors: doors.filter(([, zs]) => zs.includes(z.name)).map(([d]) => d) }));
+    return this.occupancy.zones.map((z) => ({ name: z.name, onSite: z.onSite, notInAcs: z.notInAcs, doors: doors.filter(([, zs]) => zs.includes(z.name)).map(([d]) => d) }));
   }
 
   start() {
+    this.running = true;
+    this.schedule(0);
+  }
+
+  /** A new ACS sign-in was stored: forget the failures of the old one and poll straight away. */
+  async signInChanged() {
+    await this.inFlight;
+    this.consecutiveFailures = 0;
+    Object.assign(this.status, { connected: null, lastError: null, server: null });
     this.running = true;
     this.schedule(0);
   }
@@ -166,19 +174,15 @@ export class Poller extends EventEmitter {
       return this.status.lastPoll;
     } catch (e) {
       this.consecutiveFailures++;
-      Object.assign(this.status, { connected: false, lastError: { at: new Date(startedAt).toISOString(), message: e.message, retryable: e.retryable !== false } });
+      Object.assign(this.status, { connected: false, lastError: { at: new Date(startedAt).toISOString(), message: e.message, retryable: e.retryable !== false, status: e.status } });
       this.log.warn?.(`[poll] failed (${this.consecutiveFailures}x): ${e.message}`);
-      this.emit('error-status', this.status);
       return null;
     }
   }
 
   /** Re-derive occupancy from the journal (after polls and after zone setting changes). */
   recompute() {
-    const before = JSON.stringify(this.occupancy?.musterList?.map((p) => [p.key, p.zoneName]) ?? []);
     this.occupancy = computeOccupancy(this.store.journal.values(), this.cfg, this.now(), this.zoneCtx);
-    const after = JSON.stringify(this.occupancy.musterList.map((p) => [p.key, p.zoneName]));
-    this.emit('occupancy', this.occupancy, before !== after);
     return this.occupancy;
   }
 }

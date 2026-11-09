@@ -34,7 +34,7 @@ export class AcsClient {
     if (!baseUrl) throw new Error('acs.baseUrl is required');
     this.base = new URL(baseUrl);
     this.isHttps = this.base.protocol === 'https:';
-    this.auth = username ? 'Basic ' + Buffer.from(`${username}:${password ?? ''}`).toString('base64') : null;
+    this.setCredentials(username, password);
     this.timeoutMs = timeoutMs;
     this.pin = tls.fingerprint256 ? tls.fingerprint256.replace(/[^0-9a-f]/gi, '').toUpperCase() : null;
     if (this.isHttps) {
@@ -47,6 +47,15 @@ export class AcsClient {
       this.agent = new http.Agent({ keepAlive: true, maxSockets: 4 });
     }
   }
+
+  setCredentials(username, password) {
+    this.auth = username ? 'Basic ' + Buffer.from(`${username}:${password ?? ''}`).toString('base64') : null;
+  }
+
+  close() { this.agent.destroy(); }
+
+  /** Rejects unless this sign-in can read the badge events the app depends on. */
+  verifyAccess() { return this.call('ExternalDataFacade', 'GetExternalData', { Limit: 1 }); }
 
   /** POST a JSON body to /Acs/Api/<facade>/<operation>. Resolves to parsed JSON (or null for empty body). */
   call(facade, operation, body = {}) {

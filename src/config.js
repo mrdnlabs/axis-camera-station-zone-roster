@@ -1,5 +1,5 @@
-// Config loading/saving. The config file holds which zones don't count as on site (editable from the web UI);
-// secrets come from environment variables so they never need to be written to disk.
+// Config loading/saving. The web UI can change which zones count as on site and the unconfirmed limit.
+// Secrets come from environment variables so they never need to be written to this file.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,22 +28,9 @@ export const DEFAULTS = {
     staleAfterHours: 18,         // on-site people with no badge for this long are reported as stale
     journalRetentionDays: 7,
   },
-  offSiteZones: [],              // Secure Entry zone names that don't count toward the muster list (e.g. a parking garage)
+  offSiteZones: [],              // Secure Entry zone names that don't count as on site (e.g. a parking garage)
   server: { host: '127.0.0.1', port: 8787, allowedHosts: [] }, // allowedHosts: extra host names the dashboard answers to
-  facilityOs: {
-    enabled: false,              // false = dry run: write out/mustering-list.csv only
-    tokenUrl: 'https://api.goilobby.com/auth/connect/token',
-    apiBase: 'https://partnerapi.goilobby.com',
-    clientId: '',                // or env FOS_CLIENT_ID
-    clientSecret: '',            // or env FOS_CLIENT_SECRET
-    customerId: '',              // "cid" header, or env FOS_CUSTOMER_ID
-    pushEveryMin: 15,
-    includeStale: false,
-    // CSV schema for /emos/uploadmusteringlist is not published -- confirm with FacilityOS.
-    csvColumns: { name: 'Name', firstName: 'FirstName', lastName: 'LastName', cardNumber: 'BadgeNumber', zone: 'Location', lastSeen: 'LastSeenUtc', lastDoor: 'LastDoor', status: 'Status' },
-  },
   dataDir: './data',
-  outDir: './out',
 };
 
 function deepMerge(base, over) {
@@ -64,13 +51,10 @@ export function loadConfig(file) {
   if (env.ACS_BASE_URL) cfg.acs.baseUrl = env.ACS_BASE_URL;
   if (env.ACS_USERNAME) cfg.acs.username = env.ACS_USERNAME;
   if (env.ACS_PASSWORD) cfg.acs.password = env.ACS_PASSWORD;
-  if (env.FOS_CLIENT_ID) cfg.facilityOs.clientId = env.FOS_CLIENT_ID;
-  if (env.FOS_CLIENT_SECRET) cfg.facilityOs.clientSecret = env.FOS_CLIENT_SECRET;
-  if (env.FOS_CUSTOMER_ID) cfg.facilityOs.customerId = env.FOS_CUSTOMER_ID;
   const baseDir = path.dirname(abs);
   cfg.dataDir = path.resolve(baseDir, cfg.dataDir);
-  cfg.outDir = path.resolve(baseDir, cfg.outDir);
   cfg._file = abs;
+  cfg._passwordInFile = Boolean(raw.acs?.password);
   return cfg;
 }
 
@@ -81,6 +65,7 @@ const isLoopback = (host) => LOOPBACK_HOSTS.includes(host) || host === '::1';
 export function securityWarnings(cfg) {
   const out = [];
   if (!isLoopback(cfg.server.host)) out.push(`The dashboard listens on ${cfg.server.host} and has no login: anyone who can reach it can see names and card numbers.`);
+  if (cfg._passwordInFile) out.push(`${cfg._file} contains the ACS password in plain text. Remove it and use ACS_PASSWORD or the Windows service's encrypted store.`);
   const acs = new URL(cfg.acs.baseUrl);
   if (!isLoopback(acs.hostname)) {
     if (acs.protocol === 'http:') out.push('ACS is reached over plain HTTP: its username and password are sent unencrypted.');
@@ -95,12 +80,34 @@ export function validateOffSiteZones(list) {
   return list.filter((z) => typeof z !== 'string' || !z.trim() || z.length > 200).map((z) => `invalid zone name: ${JSON.stringify(z)}`);
 }
 
-/** Persist offSiteZones back into the config file, keeping every other key the user wrote. */
-export function saveOffSiteZones(cfg, offSiteZones) {
+export const MIN_STALE_HOURS = 0.5;
+
+/** The longest limit that works: badge history older than the retention period is deleted. */
+export const maxStaleHours = (cfg) => cfg.presence.journalRetentionDays * 24;
+
+export function validateStaleAfterHours(hours, cfg) {
+  const max = maxStaleHours(cfg);
+  if (typeof hours !== 'number' || !Number.isFinite(hours) || hours < MIN_STALE_HOURS || hours > max) {
+    return [`The unconfirmed limit must be between ${MIN_STALE_HOURS} and ${max} hours`];
+  }
+  return [];
+}
+
+// Changes one part of the config file, keeping every other key the user wrote.
+function updateConfigFile(cfg, change) {
   const raw = fs.existsSync(cfg._file) ? JSON.parse(fs.readFileSync(cfg._file, 'utf8')) : {};
-  raw.offSiteZones = offSiteZones;
+  change(raw);
   const tmp = cfg._file + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
   fs.renameSync(tmp, cfg._file);
+}
+
+export function saveOffSiteZones(cfg, offSiteZones) {
+  updateConfigFile(cfg, (raw) => { raw.offSiteZones = offSiteZones; });
   cfg.offSiteZones = offSiteZones;
+}
+
+export function saveStaleAfterHours(cfg, staleAfterHours) {
+  updateConfigFile(cfg, (raw) => { raw.presence = { ...raw.presence, staleAfterHours }; });
+  cfg.presence.staleAfterHours = staleAfterHours;
 }

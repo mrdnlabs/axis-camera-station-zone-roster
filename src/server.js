@@ -2,13 +2,15 @@
 //
 //   GET  /api/status             connection / poll health
 //   GET  /api/occupancy          per-zone tallies + everyone's last known zone
-//   GET  /api/muster-list        on-site people (JSON)   ?format=csv for the EmergencyOS CSV
+//   GET  /api/on-site            people on site (JSON)   ?format=csv for CSV
 //   GET  /api/events             recently ingested badge events with what they did
 //   GET  /api/doors              discovered doors and their zones
 //   GET  /api/zones              zones from ACS with their on-site setting and doors
 //   PUT  /api/zones              save {offSiteZones: [names]} (recomputes occupancy from the journal)
+//   PUT  /api/presence           save {staleAfterHours} (recomputes occupancy)
+//   GET  /api/acs-sign-in        current ACS username and whether it can be changed here (this computer only)
+//   PUT  /api/acs-sign-in        test {username, password} against ACS and store them (this computer only)
 //   POST /api/poll               poll ACS now
-//   POST /api/facilityos/push    push the muster list now (e.g. when an evacuation starts)
 //
 // Binds to 127.0.0.1 by default. This example dashboard has no login: put it behind authentication
 // before exposing it on a network. Requests must name a known host, which blocks DNS rebinding.
@@ -18,9 +20,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { validateOffSiteZones, saveOffSiteZones, LOOPBACK_HOSTS } from './config.js';
+import { validateOffSiteZones, saveOffSiteZones, validateStaleAfterHours, saveStaleAfterHours, maxStaleHours, LOOPBACK_HOSTS } from './config.js';
+import { SignIn } from './credentials.js';
 import { discoverDoors } from './discovery.js';
-import { buildMusterCsv } from './facilityOsSink.js';
+import { buildOnSiteCsv } from './csv.js';
 
 // Handlers return plain data (200) or reply(code, body) for other statuses.
 class Reply { constructor(code, body) { this.code = code; this.body = body; } }
@@ -32,16 +35,25 @@ const SECURITY_HEADERS = {
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
   // Inline styles are needed only for the zone meter widths.
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 
-export function createServer({ cfg, poller, sink, client, log = console }) {
+export function createServer({ cfg, poller, client, log = console, secrets = null }) {
   let doorCache = { at: 0, data: null };
+  const signIn = new SignIn({ cfg, client, poller, secrets, log });
   const allowedHosts = new Set([...LOOPBACK_HOSTS, cfg.server.host, ...(cfg.server.allowedHosts ?? [])].map((h) => h.toLowerCase()));
-  const hostAllowed = (req) => {
-    try { return allowedHosts.has(new URL(`http://${req.headers.host}`).hostname); } catch { return false; }
+  const hostName = (req) => {
+    try { return new URL(`http://${req.headers.host}`).hostname; } catch { return null; }
   };
+  const hostAllowed = (req) => allowedHosts.has(hostName(req));
+  // The dashboard has no TLS, so a password may only travel over the loopback connection. A proxy on this
+  // computer also connects from loopback, so anything marked as forwarded is treated as remote.
+  const fromThisComputer = (req) => /^(127\.|::1$|::ffff:127\.)/.test(req.socket.remoteAddress ?? '')
+    && LOOPBACK_HOSTS.includes(hostName(req))
+    && !['forwarded', 'x-forwarded-for', 'x-real-ip', 'via'].some((h) => req.headers[h]);
+  const hasSignIn = () => client.auth !== null;
+  const noSignIn = () => reply(409, { error: 'Enter the ACS sign-in in Setup first' });
 
   const json = (res, code, body) => {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -68,12 +80,14 @@ export function createServer({ cfg, poller, sink, client, log = console }) {
       journalSize: poller.store.journal.size,
       watermark: poller.store.watermark ? new Date(poller.store.watermark).toISOString() : null,
       polling: cfg.polling,
-      facilityOs: { enabled: cfg.facilityOs.enabled, last: sink.last },
+      presence: { staleAfterHours: cfg.presence.staleAfterHours, maxHours: maxStaleHours(cfg) },
+      signInNeeded: !hasSignIn() || poller.status.lastError?.status === 401,
     }),
     'GET /api/occupancy': () => poller.occupancy,
     'GET /api/events': () => poller.feed(),
     'GET /api/zones': () => ({ zones: poller.zoneList() }),
     'GET /api/doors': async (req, url) => {
+      if (!hasSignIn()) return noSignIn();
       const refresh = url.searchParams.has('refresh');
       if (refresh) { await poller.refreshZones(); poller.recompute(); }
       if (refresh || !doorCache.data || Date.now() - doorCache.at > 5 * 60_000) {
@@ -91,14 +105,25 @@ export function createServer({ cfg, poller, sink, client, log = console }) {
       const occupancy = poller.recompute();
       return { ok: true, occupancy, zones: poller.zoneList() };
     },
+    'PUT /api/presence': async (req) => {
+      if (!sameOriginJson(req)) return reply(403, { error: 'same-origin JSON required' });
+      const staleAfterHours = (await readBody(req))?.staleAfterHours;
+      const errors = validateStaleAfterHours(staleAfterHours, cfg);
+      if (errors.length) return reply(400, { errors });
+      saveStaleAfterHours(cfg, staleAfterHours);
+      log.info?.(`[presence] unconfirmed after ${staleAfterHours} h`);
+      return { ok: true, occupancy: poller.recompute() };
+    },
+    'GET /api/acs-sign-in': (req) => (fromThisComputer(req) ? signIn.describe() : reply(403, { error: 'Available only on the server itself' })),
+    'PUT /api/acs-sign-in': async (req) => {
+      if (!sameOriginJson(req) || !fromThisComputer(req)) return reply(403, { error: 'Available only on the server itself' });
+      const { code, body } = await signIn.change(await readBody(req));
+      return reply(code, body);
+    },
     'POST /api/poll': async (req) => {
       if (!sameOriginJson(req)) return reply(403, { error: 'same-origin JSON required' });
+      if (!hasSignIn()) return noSignIn();
       return { result: await poller.pollOnce(), status: poller.status };
-    },
-    'POST /api/facilityos/push': async (req) => {
-      if (!sameOriginJson(req)) return reply(403, { error: 'same-origin JSON required' });
-      await poller.pollOnce(); // freshest possible data before an evacuation push
-      return sink.push(poller.occupancy, 'manual');
     },
   };
 
@@ -108,11 +133,11 @@ export function createServer({ cfg, poller, sink, client, log = console }) {
     if (!URL.canParse(req.url, 'http://local')) return json(res, 400, { error: 'bad request' });
     try {
       const url = new URL(req.url, 'http://local');
-      if (url.pathname === '/api/muster-list' && req.method === 'GET') {
-        const people = sink.musterPeople(poller.occupancy);
+      if (url.pathname === '/api/on-site' && req.method === 'GET') {
+        const people = poller.occupancy.onSiteList;
         if (url.searchParams.get('format') === 'csv') {
-          res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="mustering-list.csv"' });
-          return res.end(buildMusterCsv(people, cfg.facilityOs.csvColumns));
+          res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="on-site.csv"' });
+          return res.end(buildOnSiteCsv(people));
         }
         return json(res, 200, { generatedAt: poller.occupancy.computedAt, count: people.length, people });
       }

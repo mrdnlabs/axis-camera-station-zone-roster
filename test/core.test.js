@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { normalizeRecord, fingerprint, eventTypeFilter } from '../src/normalize.js';
 import { computeOccupancy, classify } from '../src/occupancy.js';
 import { parseAcsTime, formatAcsTime } from '../src/time.js';
-import { buildMusterCsv } from '../src/facilityOsSink.js';
+import { buildOnSiteCsv } from '../src/csv.js';
 import { validateOffSiteZones, securityWarnings, DEFAULTS } from '../src/config.js';
 import { makeRecord } from './mockAcs.js';
 
@@ -128,7 +128,7 @@ test('an inside-door badge resets the unconfirmed timer and places someone whose
   assert.equal(o.totals.onSite, 1);
   assert.equal(o.people[0].lastAction, 'confirm');
   const missed = computeOccupancy([ev({ t: T0, door: 'Lab', side: 'A', name: 'Bob', card: 2, zone: 'Inside Z' })], c, T0);
-  assert.deepEqual(missed.musterList.map((p) => p.zoneName), ['Z']);
+  assert.deepEqual(missed.onSiteList.map((p) => p.zoneName), ['Z']);
 });
 
 test('zones marked off site do not count; zones with nobody still appear', () => {
@@ -140,7 +140,7 @@ test('zones marked off site do not count; zones with nobody still appear', () =>
   ];
   const o = computeOccupancy(j, c, T0 + 120_000, { zones: new Set(['Empty wing']) });
   assert.equal(o.totals.onSite, 1);
-  assert.deepEqual(o.musterList.map((p) => p.name), ['Ann']);
+  assert.deepEqual(o.onSiteList.map((p) => p.name), ['Ann']);
   assert.equal(o.zones.find((z) => z.name === 'Parking garage').count, 1);
   assert.equal(o.zones.find((z) => z.name === 'Empty wing').count, 0);
   c.offSiteZones = [];
@@ -198,8 +198,8 @@ test('off-site zone setting validation', () => {
   assert.match(validateOffSiteZones([''])[0], /invalid/);
 });
 
-test('muster CSV escapes and neutralizes formula injection', () => {
-  const csv = buildMusterCsv([{ name: '=HYPERLINK("x")', cardNumbers: ['1'], zoneName: 'Bldg, North', lastSeen: 'T', lastDoor: 'd1', stale: false }], DEFAULTS.facilityOs.csvColumns);
+test('the on-site CSV escapes and neutralizes formula injection', () => {
+  const csv = buildOnSiteCsv([{ name: '=HYPERLINK("x")', cardNumbers: ['1'], zoneName: 'Bldg, North', lastSeen: 'T', lastDoor: 'd1', stale: false }]);
   const row = csv.split('\r\n')[1];
   assert.ok(row.startsWith(`"'=HYPERLINK(""x"")"`), row);
   assert.ok(row.includes('"Bldg, North"'));
